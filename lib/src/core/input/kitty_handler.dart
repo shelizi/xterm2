@@ -30,6 +30,14 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
 
     final specialCode = _specialKeyCode(event.key);
     if (specialCode != null) {
+      // Kitty only reports standalone modifier-key events when the application
+      // explicitly enables "report all keys as escape codes" (bit 8).
+      // Disambiguation/event-type modes alone must not turn Shift/Ctrl/Alt/Meta
+      // presses into visible CSI-u input.
+      if (_isStandaloneModifierKey(event.key) &&
+          mode & _reportAllKeysAsEscapeCodes == 0) {
+        return null;
+      }
       return _sequence(specialCode, event);
     }
 
@@ -319,6 +327,21 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       TerminalKey.space => 32,
       TerminalKey.backspace => 127,
       _ => null,
+    };
+  }
+
+  bool _isStandaloneModifierKey(TerminalKey key) {
+    return switch (key) {
+      TerminalKey.shiftLeft ||
+      TerminalKey.controlLeft ||
+      TerminalKey.altLeft ||
+      TerminalKey.metaLeft ||
+      TerminalKey.shiftRight ||
+      TerminalKey.controlRight ||
+      TerminalKey.altRight ||
+      TerminalKey.metaRight =>
+        true,
+      _ => false,
     };
   }
 

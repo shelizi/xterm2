@@ -1770,6 +1770,69 @@ void main() {
       expect(terminalOutput.join(), 'AAA');
     });
 
+    testWidgets(
+      'Kitty disambiguation does not report standalone modifier keys',
+      (tester) async {
+        final terminalOutput = <String>[];
+        final terminal = Terminal(onOutput: terminalOutput.add);
+        terminal.write('\x1b[=1u');
+
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(terminal, autofocus: true),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump(const Duration(seconds: 1));
+
+        for (final key in <LogicalKeyboardKey>[
+          LogicalKeyboardKey.shiftLeft,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.metaLeft,
+        ]) {
+          await tester.sendKeyDownEvent(key);
+          await tester.sendKeyUpEvent(key);
+        }
+
+        expect(terminalOutput, isEmpty);
+      },
+    );
+
+    testWidgets('Kitty disambiguation keeps Tab in legacy form',
+        (tester) async {
+      final terminalOutput = <String>[];
+      final terminal = Terminal(onOutput: terminalOutput.add);
+      terminal.write('\x1b[=1u');
+
+      await tester.pumpWidget(MaterialApp(
+        home: TerminalView(terminal, autofocus: true),
+      ));
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump(const Duration(seconds: 1));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+
+      expect(terminalOutput, ['\t']);
+    });
+
+    testWidgets('Kitty report-all mode reports standalone modifier keys', (
+      tester,
+    ) async {
+      final terminalOutput = <String>[];
+      final terminal = Terminal(onOutput: terminalOutput.add);
+      terminal.write('\x1b[=8u');
+
+      await tester.pumpWidget(MaterialApp(
+        home: TerminalView(terminal, autofocus: true),
+      ));
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump(const Duration(seconds: 1));
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+
+      expect(terminalOutput, contains('\x1b[57441;2u'));
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    });
+
     testWidgets('forwards Kitty key release events', (tester) async {
       final terminalOutput = <String>[];
       final terminal = Terminal(onOutput: terminalOutput.add);
