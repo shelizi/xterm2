@@ -60,6 +60,7 @@ class CustomTextEdit extends StatefulWidget {
 
 class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   TextInputConnection? _connection;
+  KeyDownEvent? _pendingEnterAfterComposition;
 
   @override
   void initState() {
@@ -145,6 +146,17 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return widget.onKeyEvent(focusNode, event);
     }
 
+    if (defaultTargetPlatform == TargetPlatform.windows &&
+        event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.enter) {
+      // Windows IMEs can consume the main Enter while they commit composition.
+      // Replay it only after the committed text arrives so the terminal sees
+      // text before the submit key.
+      _pendingEnterAfterComposition = event;
+    } else if (event is KeyDownEvent) {
+      _pendingEnterAfterComposition = null;
+    }
+
     return KeyEventResult.skipRemainingHandlers;
   }
 
@@ -187,6 +199,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   void _closeInputConnectionIfNeeded() {
+    _pendingEnterAfterComposition = null;
     if (_connection != null && _connection!.attached) {
       _connection!.close();
       _connection = null;
@@ -244,11 +257,20 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         _currentEditingState.text != _initEditingState.text) {
       _connection!.setEditingState(_initEditingState);
     }
+
+    final pendingEnter = _pendingEnterAfterComposition;
+    if (pendingEnter != null) {
+      _pendingEnterAfterComposition = null;
+      widget.onKeyEvent(widget.focusNode, pendingEnter);
+    }
   }
 
   @override
   void performAction(TextInputAction action) {
     // print('performAction $action');
+    if (action == TextInputAction.done || action == TextInputAction.newline) {
+      _pendingEnterAfterComposition = null;
+    }
     widget.onAction(action);
   }
 

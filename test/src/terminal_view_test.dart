@@ -1814,6 +1814,51 @@ void main() {
       expect(terminalOutput, ['\t']);
     });
 
+    testWidgets(
+      'Windows Enter submitted during IME composition is replayed after commit',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        try {
+          final terminalOutput = <String>[];
+          final terminal = Terminal(
+            onOutput: terminalOutput.add,
+            platform: TerminalTargetPlatform.windows,
+          );
+
+          await tester.pumpWidget(MaterialApp(
+            home: TerminalView(terminal, autofocus: true),
+          ));
+          await tester.tap(find.byType(TerminalView));
+          await tester.pump();
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'echo ok',
+              selection: TextSelection.collapsed(offset: 7),
+              composing: TextRange(start: 0, end: 7),
+            ),
+          );
+          await binding.idle();
+
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+          expect(terminalOutput, isEmpty);
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'echo ok',
+              selection: TextSelection.collapsed(offset: 7),
+            ),
+          );
+          await binding.idle();
+
+          expect(terminalOutput, <String>['echo ok', '\r']);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+
     testWidgets('Kitty report-all mode reports standalone modifier keys', (
       tester,
     ) async {
