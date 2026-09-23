@@ -538,6 +538,17 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
   }
 
+  /// Extends the current selection to the cell at [position] while preserving
+  /// the original selection anchor.
+  bool extendSelectionTo(Offset position) {
+    final target = getCellOffset(position);
+    return _controller.extendSelectionToCell(
+      _terminal.buffer,
+      start: _cellSelectionStart(target),
+      end: _cellSelectionEnd(target),
+    );
+  }
+
   CellOffset _cellSelectionStart(CellOffset position) {
     final line = _terminal.buffer.lines[position.y];
     if (position.x > 0 &&

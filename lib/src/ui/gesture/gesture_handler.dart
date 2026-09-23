@@ -328,6 +328,9 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onSingleTapUp(TapUpDetails details) {
+    if (_shouldExtendSelectionWithShift) {
+      renderTerminal.extendSelectionTo(details.localPosition);
+    }
     _tapUp(widget.onSingleTapUp, details, TerminalMouseButton.left);
   }
 
@@ -360,6 +363,12 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   bool get _applicationHandlesTap {
     if (!_shouldSendTapEvent) return false;
     return widget.terminalView.widget.terminal.mouseMode != MouseMode.none;
+  }
+
+  bool get _shouldExtendSelectionWithShift {
+    if (!_isShiftPressed || _applicationHandlesTap) return false;
+    final buffer = widget.terminalView.widget.terminal.buffer;
+    return widget.terminalController.selectionFor(buffer) != null;
   }
 
   void onLongPressStart(LongPressStartDetails details) {

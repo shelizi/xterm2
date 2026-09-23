@@ -96,6 +96,26 @@ class TerminalController with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Extends the current selection to the target cell while preserving the
+  /// original selection anchor. Returns false when the current selection does
+  /// not belong to [buffer].
+  bool extendSelectionToCell(
+    Buffer buffer, {
+    required CellOffset start,
+    required CellOffset end,
+  }) {
+    final base = _selectionBase;
+    if (base == null || !base.attached || !buffer.ownsAnchor(base)) {
+      return false;
+    }
+
+    final extentOffset = base.offset.isBeforeOrSame(start) ? end : start;
+    _selectionExtent?.dispose();
+    _selectionExtent = buffer.createAnchorFromOffset(extentOffset);
+    notifyListeners();
+    return true;
+  }
+
   BufferRange _createRange(CellOffset begin, CellOffset end) {
     switch (selectionMode) {
       case SelectionMode.line:

@@ -647,7 +647,8 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _onTapDown(_) {
-    if (_controller.selection != null) {
+    if (_controller.selection != null &&
+        !HardwareKeyboard.instance.isShiftPressed) {
       _controller.clearSelection();
     } else {
       if (!widget.hardwareKeyboardOnly) {

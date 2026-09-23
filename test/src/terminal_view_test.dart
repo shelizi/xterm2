@@ -1369,6 +1369,45 @@ void main() {
   });
 
   group('TerminalView selection gestures', () {
+    testWidgets('shift click extends the existing selection', (tester) async {
+      final terminal = Terminal(maxLines: 10)..resize(10, 2);
+      final controller = TerminalController();
+      terminal.write('abcdefghij');
+
+      controller.setSelection(
+        terminal.buffer.createAnchor(1, 0),
+        terminal.buffer.createAnchor(3, 0),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              controller: controller,
+              autoResize: false,
+              autofocus: true,
+            ),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final cellSize = state.renderTerminal.cellSize;
+      final position = state.renderTerminal.localToGlobal(
+        Offset(cellSize.width * 5.5, cellSize.height * 0.5),
+      );
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.tapAt(position);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(terminal.buffer.getText(controller.selection), 'bcdef');
+
+      controller.dispose();
+    });
+
     testWidgets('mouse-reporting apps own repeated clicks', (tester) async {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add)..write('clickable');
