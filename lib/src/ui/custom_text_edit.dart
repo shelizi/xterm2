@@ -131,7 +131,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     _connection?.setEditableSizeAndTransform(
       rect.size,
-      Matrix4.translationValues(0, 0, 0),
+      Matrix4.translationValues(rect.left, rect.top, 0),
     );
 
     _connection?.setCaretRect(caretRect);
@@ -143,6 +143,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
     if (_currentEditingState.composing.isCollapsed) {
+      // On macOS raw printable keys precede the IME's committed text. Sending
+      // both to the PTY leaks Zhuyin phonetic keys or duplicates Latin input.
+      if (_usesMacTextInputForKey(event)) {
+        return KeyEventResult.skipRemainingHandlers;
+      }
       return widget.onKeyEvent(focusNode, event);
     }
 
@@ -158,6 +163,23 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     }
 
     return KeyEventResult.skipRemainingHandlers;
+  }
+
+  bool _usesMacTextInputForKey(KeyEvent event) {
+    if (defaultTargetPlatform != TargetPlatform.macOS || !hasInputConnection) {
+      return false;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isControlPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isMetaPressed) {
+      return false;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.space) {
+      return true;
+    }
+    final label = event.logicalKey.keyLabel;
+    return label.runes.length == 1 && label.runes.first >= 0x20;
   }
 
   void _openOrCloseInputConnectionIfNeeded() {
@@ -270,6 +292,12 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     // print('performAction $action');
     if (action == TextInputAction.done || action == TextInputAction.newline) {
       _pendingEnterAfterComposition = null;
+      // macOS Return already arrives as a hardware key. During composition
+      // the same Return may appear as an action for selecting an IME candidate;
+      // forwarding it would accidentally execute the terminal command.
+      if (defaultTargetPlatform == TargetPlatform.macOS) {
+        return;
+      }
     }
     widget.onAction(action);
   }

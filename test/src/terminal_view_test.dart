@@ -1853,6 +1853,139 @@ void main() {
       expect(terminalOutput, ['\t']);
     });
 
+    testWidgets('macOS Latin typing uses text input and keeps Ctrl shortcuts', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final output = <String>[];
+        final terminal = Terminal(
+          onOutput: output.add,
+          platform: TerminalTargetPlatform.macos,
+        );
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(terminal, autofocus: true),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyA, character: 'a');
+        expect(output, isEmpty);
+        binding.testTextInput.enterText('a');
+        await binding.idle();
+        expect(output, <String>['a']);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC, character: 'c');
+        expect(output, <String>['a', '\u0003']);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('IME caret coordinates remain local in a right-hand split', (
+      tester,
+    ) async {
+      final terminal = Terminal();
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.centerRight,
+            child: SizedBox(
+              width: 200,
+              height: 120,
+              child: TerminalView(terminal, autofocus: true),
+            ),
+          ),
+        ),
+      ));
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final render = state.renderTerminal;
+      Rect? editableRect;
+      Rect? caretRect;
+      render.onEditableRect = (editable, caret) {
+        editableRect = editable;
+        caretRect = caret;
+      };
+      // A terminal buffer update explicitly reports the new caret geometry.
+      terminal.write('x');
+      await tester.pump();
+
+      expect(editableRect, isNotNull);
+      expect(editableRect!.topLeft, render.localToGlobal(Offset.zero));
+      expect(editableRect!.size, render.size);
+      expect(editableRect!.width, greaterThan(0));
+      expect(caretRect, render.cursorOffset & render.cursorSize);
+    });
+
+    testWidgets('macOS IME holds phonetic keys until committed text arrives', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final output = <String>[];
+        final terminal = Terminal(
+          onOutput: output.add,
+          platform: TerminalTargetPlatform.macos,
+        );
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(terminal, autofocus: true),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+
+        expect(
+          tester
+              .state<TerminalViewState>(find.byType(TerminalView))
+              .hasInputConnection,
+          isTrue,
+        );
+        // First raw phonetic key arrives before IME reports composition.
+        await tester.sendKeyDownEvent(
+          LogicalKeyboardKey.keyN,
+          character: 'n',
+        );
+        expect(output, isEmpty);
+
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'ㄋ',
+            selection: TextSelection.collapsed(offset: 1),
+            composing: TextRange(start: 0, end: 1),
+          ),
+        );
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.space);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+        expect(output, isEmpty);
+
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: '你',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await binding.idle();
+        expect(output, <String>['你']);
+
+        // Candidate selection is not a shell submission.
+        await binding.testTextInput.receiveAction(TextInputAction.newline);
+        await binding.idle();
+        expect(output, <String>['你']);
+
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyN);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+        expect(output, <String>['你', '\r']);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
     testWidgets(
       'Windows Enter submitted during IME composition is replayed after commit',
       (tester) async {

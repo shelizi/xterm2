@@ -595,16 +595,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final onEditableRect = _onEditableRect;
     if (onEditableRect == null) return;
 
-    final cursor = localToGlobal(cursorOffset);
-
-    final rect = Rect.fromLTRB(
-      cursor.dx,
-      cursor.dy,
-      size.width,
-      cursor.dy + _painter.cellSize.height,
-    );
-
-    final caretRect = cursor & cursorSize;
+    // Flutter expects the editable region's global transform and the caret
+    // rectangle in that region's local coordinate space. Mixing a global
+    // cursor with the local viewport width can produce a negative size for
+    // a terminal in a right-hand split and misplace macOS IME candidates.
+    final rect = localToGlobal(Offset.zero) & size;
+    final caretRect = cursorOffset & cursorSize;
 
     onEditableRect(rect, caretRect);
   }
