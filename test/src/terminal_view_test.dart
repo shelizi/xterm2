@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
+import 'package:xterm2/src/ui/custom_text_edit.dart';
 import 'package:xterm2/src/ui/shortcut/actions.dart';
 import 'package:xterm2/xterm.dart';
 
@@ -42,6 +43,18 @@ const _lightTheme = TerminalTheme(
 );
 
 void main() {
+  testWidgets('text input follows the view that builds the terminal', (
+    tester,
+  ) async {
+    final terminal = Terminal();
+    await tester.pumpWidget(MaterialApp(home: TerminalView(terminal)));
+    final edit = tester.widget<CustomTextEdit>(find.byType(CustomTextEdit));
+    final viewId = View.of(tester.element(find.byType(TerminalView))).viewId;
+
+    expect(edit.viewId, viewId);
+    expect(edit.viewId, isNotNull);
+  });
+
   testWidgets('terminal writes avoid layout when geometry is unchanged', (
     tester,
   ) async {
@@ -1987,6 +2000,116 @@ void main() {
     });
 
     testWidgets(
+      'updates that still carry consumed text only emit their new suffix',
+      (tester) async {
+        final output = <String>[];
+        final terminal = Terminal(onOutput: output.add);
+        await tester.pumpWidget(
+          MaterialApp(home: TerminalView(terminal, autofocus: true)),
+        );
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+
+        TextEditingValue plain(String text) => TextEditingValue(
+              text: text,
+              selection: TextSelection.collapsed(offset: text.length),
+            );
+
+        binding.testTextInput.updateEditingValue(plain('e'));
+        binding.testTextInput.updateEditingValue(plain('c'));
+        // The platform appended the next keystrokes to values that were
+        // already consumed because its reset had not landed yet.
+        binding.testTextInput.updateEditingValue(plain('ch'));
+        binding.testTextInput.updateEditingValue(plain('cho'));
+        binding.testTextInput.updateEditingValue(plain('cho '));
+        binding.testTextInput.updateEditingValue(plain('cho r'));
+        await binding.idle();
+        expect(output, <String>['e', 'c', 'h', 'o', ' ', 'r']);
+
+        // A reset echo (empty value) emits only an empty insert.
+        binding.testTextInput.updateEditingValue(plain(''));
+        await binding.idle();
+        expect(output, <String>['e', 'c', 'h', 'o', ' ', 'r', '']);
+
+        // A fresh value after the reset emits whole, including a retype of
+        // the same character.
+        binding.testTextInput.updateEditingValue(plain('w'));
+        binding.testTextInput.updateEditingValue(plain('w'));
+        await binding.idle();
+        expect(output, <String>['e', 'c', 'h', 'o', ' ', 'r', '', 'w', 'w']);
+
+        // A buffer that shrank to a prefix of the stale consumed text is new
+        // input, not an echo: the reset landed and the user typed 'e' again.
+        binding.testTextInput.updateEditingValue(plain('ex'));
+        binding.testTextInput.updateEditingValue(plain('e'));
+        await binding.idle();
+        expect(output, <String>[
+          'e',
+          'c',
+          'h',
+          'o',
+          ' ',
+          'r',
+          '',
+          'w',
+          'w',
+          'ex',
+          'e',
+        ]);
+      },
+    );
+
+    testWidgets(
+      'EarlyInputAttachScope attaches the input client before real focus',
+      (tester) async {
+        final output = <String>[];
+        final terminal = Terminal(onOutput: output.add);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: EarlyInputAttachScope(
+              child: TerminalView(terminal, autofocus: false),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // The window is still hidden: no focus, no tap. The platform client
+        // must already exist or the first keystrokes are dropped by the
+        // embedder.
+        binding.testTextInput.enterText('x');
+        await binding.idle();
+        expect(output, <String>['x']);
+      },
+    );
+
+    testWidgets(
+      'a focused field reclaims the client stolen by an early attach',
+      (tester) async {
+        final output = <String>[];
+        final terminal = Terminal(onOutput: output.add);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: EarlyInputAttachScope(
+              child: _TwoFieldHost(terminal: terminal),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // Both fields attached eagerly; the second stole the platform client.
+        // Focus lands on the terminal — it must reclaim instead of trusting
+        // its stale `attached` flag.
+        final state = tester.state(find.byType(_TwoFieldHost)) as dynamic;
+        state.focusTerminal();
+        await tester.pump();
+
+        binding.testTextInput.enterText('y');
+        await binding.idle();
+        expect(output, <String>['y']);
+      },
+    );
+
+    testWidgets(
       'Windows Enter submitted during IME composition is replayed after commit',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
@@ -2026,6 +2149,189 @@ void main() {
           expect(terminalOutput, <String>['echo ok', '\r']);
           await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
         } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+
+    testWidgets(
+      'Windows Enter held through IME commit submits when the key was consumed',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        CustomTextEditState.debugWindowsEnterIsDown = () => true;
+        try {
+          final terminalOutput = <String>[];
+          final terminal = Terminal(
+            onOutput: terminalOutput.add,
+            platform: TerminalTargetPlatform.windows,
+          );
+
+          await tester.pumpWidget(MaterialApp(
+            home: TerminalView(terminal, autofocus: true),
+          ));
+          await tester.tap(find.byType(TerminalView));
+          await tester.pump();
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: '你',
+              selection: TextSelection.collapsed(offset: 1),
+              composing: TextRange(start: 0, end: 1),
+            ),
+          );
+          await binding.idle();
+          expect(terminalOutput, isEmpty);
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: '你',
+              selection: TextSelection.collapsed(offset: 1),
+            ),
+          );
+          await binding.idle();
+
+          expect(terminalOutput, <String>['你', '\r']);
+        } finally {
+          CustomTextEditState.debugWindowsEnterIsDown = null;
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+
+    testWidgets(
+      'Windows IME commit without Enter leaves the text on the line',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        CustomTextEditState.debugWindowsEnterIsDown = () => false;
+        try {
+          final terminalOutput = <String>[];
+          final terminal = Terminal(
+            onOutput: terminalOutput.add,
+            platform: TerminalTargetPlatform.windows,
+          );
+
+          await tester.pumpWidget(MaterialApp(
+            home: TerminalView(terminal, autofocus: true),
+          ));
+          await tester.tap(find.byType(TerminalView));
+          await tester.pump();
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: '好',
+              selection: TextSelection.collapsed(offset: 1),
+              composing: TextRange(start: 0, end: 1),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 16));
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: '好',
+              selection: TextSelection.collapsed(offset: 1),
+            ),
+          );
+          await binding.idle();
+
+          expect(terminalOutput, <String>['好']);
+        } finally {
+          CustomTextEditState.debugWindowsEnterIsDown = null;
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+
+    testWidgets(
+      'Windows Enter seen during composition still submits after release',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        var enterDown = false;
+        CustomTextEditState.debugWindowsEnterIsDown = () => enterDown;
+        try {
+          final terminalOutput = <String>[];
+          final terminal = Terminal(
+            onOutput: terminalOutput.add,
+            platform: TerminalTargetPlatform.windows,
+          );
+
+          await tester.pumpWidget(MaterialApp(
+            home: TerminalView(terminal, autofocus: true),
+          ));
+          await tester.tap(find.byType(TerminalView));
+          await tester.pump();
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: '你',
+              selection: TextSelection.collapsed(offset: 1),
+              composing: TextRange(start: 0, end: 1),
+            ),
+          );
+          enterDown = true;
+          await tester.pump(const Duration(milliseconds: 8));
+          enterDown = false;
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: '你',
+              selection: TextSelection.collapsed(offset: 1),
+            ),
+          );
+          await binding.idle();
+
+          expect(terminalOutput, <String>['你', '\r']);
+
+          // The replay guard must not eat the next real Enter.
+          await tester.pump(const Duration(milliseconds: 50));
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+          expect(terminalOutput, <String>['你', '\r', '\r']);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+        } finally {
+          CustomTextEditState.debugWindowsEnterIsDown = null;
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+
+    testWidgets(
+      'Windows stashed Enter is not submitted twice when the key stays down',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        CustomTextEditState.debugWindowsEnterIsDown = () => true;
+        try {
+          final terminalOutput = <String>[];
+          final terminal = Terminal(
+            onOutput: terminalOutput.add,
+            platform: TerminalTargetPlatform.windows,
+          );
+
+          await tester.pumpWidget(MaterialApp(
+            home: TerminalView(terminal, autofocus: true),
+          ));
+          await tester.tap(find.byType(TerminalView));
+          await tester.pump();
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'echo ok',
+              selection: TextSelection.collapsed(offset: 7),
+              composing: TextRange(start: 0, end: 7),
+            ),
+          );
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+          expect(terminalOutput, isEmpty);
+
+          binding.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'echo ok',
+              selection: TextSelection.collapsed(offset: 7),
+            ),
+          );
+          await binding.idle();
+
+          expect(terminalOutput, <String>['echo ok', '\r']);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+        } finally {
+          CustomTextEditState.debugWindowsEnterIsDown = null;
           debugDefaultTargetPlatformOverride = null;
         }
       },
@@ -2307,5 +2613,51 @@ Future<void> _sendPromptNavigationShortcut(
       await tester.sendKeyEvent(key);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  }
+}
+
+class _TwoFieldHost extends StatefulWidget {
+  const _TwoFieldHost({required this.terminal});
+
+  final Terminal terminal;
+
+  @override
+  State<_TwoFieldHost> createState() => _TwoFieldHostState();
+}
+
+class _TwoFieldHostState extends State<_TwoFieldHost> {
+  final FocusNode _terminalFocus = FocusNode();
+  final FocusNode _otherFocus = FocusNode();
+
+  void focusTerminal() => _terminalFocus.requestFocus();
+
+  @override
+  void dispose() {
+    _terminalFocus.dispose();
+    _otherFocus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(
+          child: TerminalView(widget.terminal, focusNode: _terminalFocus),
+        ),
+        SizedBox(
+          height: 40,
+          child: CustomTextEdit(
+            focusNode: _otherFocus,
+            onInsert: (_) {},
+            onDelete: () {},
+            onComposing: (_) {},
+            onAction: (_) {},
+            onKeyEvent: (node, event) => KeyEventResult.ignored,
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ],
+    );
   }
 }

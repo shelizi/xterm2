@@ -23,6 +23,8 @@ import 'package:xterm2/src/core/mouse/modifiers.dart';
 import 'package:xterm2/src/core/platform.dart';
 import 'package:xterm2/src/core/state.dart';
 import 'package:xterm2/src/core/tabs.dart';
+import 'package:xterm2/src/ui/input_trace.dart'
+    if (dart.library.io) 'package:xterm2/src/ui/input_trace_io.dart';
 import 'package:xterm2/src/utils/ascii.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
 
@@ -858,8 +860,12 @@ class Terminal
     TerminalKeyEventType type = TerminalKeyEventType.press,
     String? text,
   }) {
-    if (_isDisposed) return false;
-    if (_keyboardActionMode) return false;
+    if (_isDisposed || _keyboardActionMode) {
+      traceTerminalInput(
+        'keyDrop key=$key disposed=$_isDisposed kam=$_keyboardActionMode',
+      );
+      return false;
+    }
     final output = inputHandler?.call(
       TerminalKeyboardEvent(
         key: key,
@@ -878,10 +884,12 @@ class Terminal
     );
 
     if (output != null) {
+      traceTerminalInput('keyOut key=$key units=${output.codeUnits}');
       onOutput?.call(output);
       return true;
     }
 
+    traceTerminalInput('keyMiss key=$key text=$text');
     return false;
   }
 
@@ -934,8 +942,13 @@ class Terminal
   /// - [charInput]
   /// - [paste]
   void textInput(String text) {
-    if (_isDisposed) return;
-    if (_keyboardActionMode) return;
+    if (_isDisposed || _keyboardActionMode) {
+      traceTerminalInput(
+        'textDrop units=${text.codeUnits} disposed=$_isDisposed kam=$_keyboardActionMode',
+      );
+      return;
+    }
+    traceTerminalInput('textOut units=${text.codeUnits}');
     onOutput?.call(text);
   }
 
@@ -1105,6 +1118,9 @@ class Terminal
   /// Reports a terminal viewport focus change to the underlying application.
   void focusInput(bool focused) {
     _focused = focused;
+    traceTerminalInput(
+      'focus focused=$focused disposed=$_isDisposed report=$_reportFocusMode',
+    );
     if (_isDisposed) return;
     if (!_reportFocusMode) return;
     onOutput?.call(switch (focused) {

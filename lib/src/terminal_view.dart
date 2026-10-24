@@ -16,6 +16,8 @@ import 'package:xterm2/src/ui/cursor_type.dart';
 import 'package:xterm2/src/ui/custom_text_edit.dart';
 import 'package:xterm2/src/ui/gesture/gesture_handler.dart';
 import 'package:xterm2/src/ui/input_map.dart';
+import 'package:xterm2/src/ui/input_trace.dart'
+    if (dart.library.io) 'package:xterm2/src/ui/input_trace_io.dart';
 import 'package:xterm2/src/ui/keyboard_listener.dart';
 import 'package:xterm2/src/ui/keyboard_visibility.dart';
 import 'package:xterm2/src/ui/kitty_modifier_key_filter.dart';
@@ -496,6 +498,10 @@ class TerminalViewState extends State<TerminalView> {
       child = CustomTextEdit(
         key: _customTextEditKey,
         focusNode: _focusNode,
+        // The implicit view is the main window. A detached terminal is a
+        // different view, and the text input client has to follow it or the
+        // first character is delivered to the wrong window.
+        viewId: View.of(context).viewId,
         autofocus: widget.autofocus,
         inputType: widget.keyboardType,
         keyboardAppearance: widget.keyboardAppearance,
@@ -674,6 +680,7 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _onInsert(String text) {
+    traceTerminalInput('onInsert "$text"');
     if (isKittyModifierKeyCharacter(text)) {
       return;
     }
@@ -689,6 +696,7 @@ class TerminalViewState extends State<TerminalView> {
     // generate hardware key events. So we need first try to send the key
     // as a hardware key event. If it fails, then we send it as a text input.
     final consumed = widget.terminal.keyInput(key, text: text);
+    traceTerminalInput('insertConsumed=$consumed key=$key');
 
     if (!consumed) {
       widget.terminal.textInput(text);
@@ -730,6 +738,9 @@ class TerminalViewState extends State<TerminalView> {
 
     final key = keyToTerminalKey(event.logicalKey);
     var text = _printableTextForKeyEvent(event);
+    traceTerminalInput(
+      'handle ${event.runtimeType} label=${event.logicalKey.keyLabel} char=${event.character} text=$text key=$key',
+    );
     if (text != null && isKittyModifierKeyCharacter(text)) {
       text = null;
     }
