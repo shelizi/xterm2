@@ -195,6 +195,26 @@ void main() {
     },
   );
 
+  test('xterm reflows wrapped content to zero width without RangeError', () {
+    final terminal = Terminal(reflowWithHiddenCursor: false);
+
+    terminal.resize(10, 4);
+    terminal.write('x' * 30);
+
+    terminal.resize(0, 4);
+  });
+
+  test('xterm reflows wrapped content at a filled boundary', () {
+    final terminal = Terminal(reflowWithHiddenCursor: false);
+
+    terminal.resize(8, 4);
+    terminal.write('x' * 20);
+
+    for (final width in <int>[1, 2, 3, 5, 7, 8, 16, 4]) {
+      terminal.resize(width, 4);
+    }
+  });
+
   test('xterm repairs a stale row before writing past its capacity', () {
     final terminal = Terminal(
       reflowWithHiddenCursor: false,

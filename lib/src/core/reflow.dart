@@ -138,8 +138,12 @@ class _LineReflow {
         lineFilled = true;
       }
 
-      // Leave the last cell to the next iteration if it's a wide char.
-      if (lineFilled && line.getWidth(from + cellsToCopy - 1) == 2) {
+      // Leave the last cell to the next iteration if it's a wide char. When
+      // the builder filled up exactly, nothing is copied this iteration and
+      // probing from-1 would read outside the line.
+      if (lineFilled &&
+          cellsToCopy > 0 &&
+          line.getWidth(from + cellsToCopy - 1) == 2) {
         cellsToCopy--;
       }
 
@@ -154,13 +158,15 @@ class _LineReflow {
         continue;
       }
 
-      for (var anchor in line.anchors.toList()) {
-        if (anchor.x >= from && anchor.x <= from + cellsToCopy) {
-          builder.addAnchor(anchor, anchor.x - from);
+      if (cellsToCopy > 0) {
+        for (var anchor in line.anchors.toList()) {
+          if (anchor.x >= from && anchor.x <= from + cellsToCopy) {
+            builder.addAnchor(anchor, anchor.x - from);
+          }
         }
-      }
 
-      builder.add(line, from, cellsToCopy);
+        builder.add(line, from, cellsToCopy);
+      }
 
       from += cellsToCopy;
       cellsLeft -= cellsToCopy;
