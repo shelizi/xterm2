@@ -2142,7 +2142,7 @@ void main() {
     );
 
     testWidgets(
-      'Windows Enter submitted during IME composition is replayed after commit',
+      'Windows Enter during IME composition stays with the composer',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
         try {
@@ -2178,6 +2178,13 @@ void main() {
           );
           await binding.idle();
 
+          // The commit key belongs to the IME: only the text lands.
+          expect(terminalOutput, <String>['echo ok']);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+
+          // A fresh Enter once the composer is closed submits normally.
+          await tester.pump(const Duration(milliseconds: 60));
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
           expect(terminalOutput, <String>['echo ok', '\r']);
           await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
         } finally {
@@ -2187,10 +2194,9 @@ void main() {
     );
 
     testWidgets(
-      'Windows Enter held through IME commit submits when the key was consumed',
+      'Windows IME commit does not submit the line',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-        CustomTextEditState.debugWindowsEnterIsDown = () => true;
         try {
           final terminalOutput = <String>[];
           final terminal = Terminal(
@@ -2222,9 +2228,8 @@ void main() {
           );
           await binding.idle();
 
-          expect(terminalOutput, <String>['你', '\r']);
+          expect(terminalOutput, <String>['你']);
         } finally {
-          CustomTextEditState.debugWindowsEnterIsDown = null;
           debugDefaultTargetPlatformOverride = null;
         }
       },
@@ -2234,7 +2239,6 @@ void main() {
       'Windows IME commit without Enter leaves the text on the line',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-        CustomTextEditState.debugWindowsEnterIsDown = () => false;
         try {
           final terminalOutput = <String>[];
           final terminal = Terminal(
@@ -2266,18 +2270,15 @@ void main() {
 
           expect(terminalOutput, <String>['好']);
         } finally {
-          CustomTextEditState.debugWindowsEnterIsDown = null;
           debugDefaultTargetPlatformOverride = null;
         }
       },
     );
 
     testWidgets(
-      'Windows Enter seen during composition still submits after release',
+      'Windows post-commit Enter echo is swallowed, a fresh Enter submits',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-        var enterDown = false;
-        CustomTextEditState.debugWindowsEnterIsDown = () => enterDown;
         try {
           final terminalOutput = <String>[];
           final terminal = Terminal(
@@ -2298,9 +2299,6 @@ void main() {
               composing: TextRange(start: 0, end: 1),
             ),
           );
-          enterDown = true;
-          await tester.pump(const Duration(milliseconds: 8));
-          enterDown = false;
 
           binding.testTextInput.updateEditingValue(
             const TextEditingValue(
@@ -2310,25 +2308,28 @@ void main() {
           );
           await binding.idle();
 
-          expect(terminalOutput, <String>['你', '\r']);
+          expect(terminalOutput, <String>['你']);
 
-          // The replay guard must not eat the next real Enter.
-          await tester.pump(const Duration(milliseconds: 50));
+          // An Enter landing right after the commit is the closing echo.
           await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
-          expect(terminalOutput, <String>['你', '\r', '\r']);
+          expect(terminalOutput, <String>['你']);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+
+          // A deliberate press after the guard window submits.
+          await tester.pump(const Duration(milliseconds: 60));
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+          expect(terminalOutput, <String>['你', '\r']);
           await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
         } finally {
-          CustomTextEditState.debugWindowsEnterIsDown = null;
           debugDefaultTargetPlatformOverride = null;
         }
       },
     );
 
     testWidgets(
-      'Windows stashed Enter is not submitted twice when the key stays down',
+      'Windows commit action during composition is not a submission',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-        CustomTextEditState.debugWindowsEnterIsDown = () => true;
         try {
           final terminalOutput = <String>[];
           final terminal = Terminal(
@@ -2349,7 +2350,9 @@ void main() {
               composing: TextRange(start: 0, end: 7),
             ),
           );
-          await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+
+          // The IME routes the composer's Enter through the action channel.
+          await binding.testTextInput.receiveAction(TextInputAction.newline);
           expect(terminalOutput, isEmpty);
 
           binding.testTextInput.updateEditingValue(
@@ -2360,10 +2363,8 @@ void main() {
           );
           await binding.idle();
 
-          expect(terminalOutput, <String>['echo ok', '\r']);
-          await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+          expect(terminalOutput, <String>['echo ok']);
         } finally {
-          CustomTextEditState.debugWindowsEnterIsDown = null;
           debugDefaultTargetPlatformOverride = null;
         }
       },

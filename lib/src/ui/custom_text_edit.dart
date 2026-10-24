@@ -5,8 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'input_trace.dart' if (dart.library.io) 'input_trace_io.dart';
-import 'windows_enter_key.dart'
-    if (dart.library.io) 'windows_enter_key_io.dart';
 
 /// Marks a subtree whose [CustomTextEdit] must open its platform input
 /// connection at mount time instead of waiting for real focus.
@@ -81,10 +79,6 @@ class CustomTextEdit extends StatefulWidget {
 }
 
 class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
-  /// Test override for the Windows Enter latch. Production reads the real key.
-  @visibleForTesting
-  static bool Function()? debugWindowsEnterIsDown;
-
   TextInputConnection? _connection;
   int? _attachedViewId;
 
@@ -94,20 +88,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// `attached` flag stays true. Tracking the owner lets a focused field reclaim
   /// the client instead of trusting a stale flag.
   static final Map<int, CustomTextEditState> _attachedOwners = {};
-  KeyDownEvent? _pendingEnterAfterComposition;
-  Timer? _enterPollTimer;
   Timer? _suppressEnterTimer;
-  bool _enterSeenDuringComposition = false;
 
-  static const _enterPollInterval = Duration(milliseconds: 8);
+  /// While a post-commit guard is armed, Enter-shaped input is the echo of
+  /// the key that closed the IME composer, not a deliberate submit.
   static const _enterReplayGuard = Duration(milliseconds: 50);
-
-  static const _enterAfterComposition = KeyDownEvent(
-    physicalKey: PhysicalKeyboardKey.enter,
-    logicalKey: LogicalKeyboardKey.enter,
-    timeStamp: Duration.zero,
-    synthesized: true,
-  );
 
   @override
   void initState() {
@@ -163,7 +148,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void dispose() {
-    _stopEnterPoll();
     _suppressEnterTimer?.cancel();
     widget.focusNode.removeListener(_onFocusChange);
     _closeInputConnectionIfNeeded();
@@ -237,17 +221,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return widget.onKeyEvent(focusNode, event);
     }
 
-    if (defaultTargetPlatform == TargetPlatform.windows &&
-        event is KeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.enter) {
-      // Windows IMEs can consume the main Enter while they commit composition.
-      // Replay it only after the committed text arrives so the terminal sees
-      // text before the submit key.
-      _pendingEnterAfterComposition = event;
-    } else if (event is KeyDownEvent) {
-      _pendingEnterAfterComposition = null;
-    }
-
+    // The IME owns every key while composition is open. Enter only selects a
+    // candidate or closes the composer; forwarding it would submit a command
+    // the user is still editing.
     return KeyEventResult.skipRemainingHandlers;
   }
 
@@ -331,10 +307,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     traceTerminalInput(
       'close attached=$_attachedViewId has=$hasInputConnection editing="${_currentEditingState.text}"',
     );
-    _pendingEnterAfterComposition = null;
     _suppressEnterTimer?.cancel();
     _suppressEnterTimer = null;
-    _stopEnterPoll();
     if (_connection != null && _connection!.attached) {
       final viewId = _attachedViewId;
       if (viewId != null && _attachedOwners[viewId] == this) {
@@ -386,20 +360,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     // Get input after composing is done
     if (!_currentEditingState.composing.isCollapsed) {
-      if (!wasComposing) {
-        _enterSeenDuringComposition = false;
-        _startEnterPoll();
-      }
       final text = _currentEditingState.text;
       final composingText = _currentEditingState.composing.textInside(text);
       widget.onComposing(composingText);
       return;
     }
-
-    final enterCommittedComposition =
-        wasComposing && _enterHeldDuringComposition();
-    _stopEnterPoll();
-    _enterSeenDuringComposition = false;
 
     widget.onComposing(null);
 
@@ -430,13 +395,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       _connection!.setEditingState(_initEditingState);
     }
 
-    final pendingEnter = _pendingEnterAfterComposition;
-    if (pendingEnter != null) {
-      _pendingEnterAfterComposition = null;
-      widget.onKeyEvent(widget.focusNode, pendingEnter);
-    } else if (enterCommittedComposition && insertedText.isNotEmpty) {
-      // The IME already consumed Enter. Submit once, after the committed text.
-      widget.onKeyEvent(widget.focusNode, _enterAfterComposition);
+    // Windows can echo the Enter that closed the composer as a key event or
+    // input action right after the commit lands. It belongs to the IME, so a
+    // submit-shaped event within this window is swallowed; the next
+    // deliberate Enter reaches the terminal normally.
+    if (wasComposing && defaultTargetPlatform == TargetPlatform.windows) {
       _armEnterReplayGuard();
     }
   }
@@ -445,11 +408,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void performAction(TextInputAction action) {
     // print('performAction $action');
     if (action == TextInputAction.done || action == TextInputAction.newline) {
-      _pendingEnterAfterComposition = null;
-      // macOS Return already arrives as a hardware key. During composition
-      // the same Return may appear as an action for selecting an IME candidate;
-      // forwarding it would accidentally execute the terminal command.
-      if (defaultTargetPlatform == TargetPlatform.macOS) {
+      // A submit-shaped action that arrives while the IME owns the text is
+      // the candidate/commit key, not a terminal submission. macOS drops it
+      // unconditionally because Return also arrives as a hardware key.
+      if (defaultTargetPlatform == TargetPlatform.macOS ||
+          !_currentEditingState.composing.isCollapsed) {
         return;
       }
       if (_suppressesReplayEnter(const KeyDownEvent(
@@ -461,43 +424,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       }
     }
     widget.onAction(action);
-  }
-
-  bool _windowsEnterIsDown() {
-    final probe = debugWindowsEnterIsDown;
-    if (probe != null) {
-      return probe();
-    }
-    if (defaultTargetPlatform != TargetPlatform.windows) {
-      return false;
-    }
-    return windowsEnterKeyIsDown();
-  }
-
-  bool _enterHeldDuringComposition() {
-    return _enterSeenDuringComposition || _windowsEnterIsDown();
-  }
-
-  void _sampleEnter() {
-    if (_windowsEnterIsDown()) {
-      _enterSeenDuringComposition = true;
-    }
-  }
-
-  void _startEnterPoll() {
-    // Only Windows eats the commit key and then delivers the text later.
-    if (defaultTargetPlatform != TargetPlatform.windows) {
-      return;
-    }
-    _sampleEnter();
-    _enterPollTimer ??= Timer.periodic(_enterPollInterval, (_) {
-      _sampleEnter();
-    });
-  }
-
-  void _stopEnterPoll() {
-    _enterPollTimer?.cancel();
-    _enterPollTimer = null;
   }
 
   void _armEnterReplayGuard() {
