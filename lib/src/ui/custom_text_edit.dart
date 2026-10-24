@@ -336,8 +336,16 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     _suppressEnterTimer = null;
     _stopEnterPoll();
     if (_connection != null && _connection!.attached) {
-      _connection!.close();
-      _connection = null;
+      final viewId = _attachedViewId;
+      if (viewId != null && _attachedOwners[viewId] == this) {
+        _connection!.close();
+      } else {
+        // A newer client already owns this view's platform channel (e.g. a
+        // detached tab switch mounts its replacement before this state is
+        // disposed). clearClient would detach *that* client, so only the
+        // recorded owner may send it; here we just drop the stale handle.
+        _connection = null;
+      }
     }
     if (_attachedOwners[_attachedViewId] == this) {
       _attachedOwners.remove(_attachedViewId);

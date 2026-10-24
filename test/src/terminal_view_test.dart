@@ -2110,6 +2110,38 @@ void main() {
     );
 
     testWidgets(
+      'disposing a superseded client leaves the newer client attached',
+      (tester) async {
+        final outputB = <String>[];
+        final terminalA = Terminal(onOutput: (_) {});
+        final terminalB = Terminal(onOutput: outputB.add);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: EarlyInputAttachScope(
+              child: _SwappingTerminalHost(
+                terminalA: terminalA,
+                terminalB: terminalB,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // Switching tabs mounts B and disposes A in the same frame. A's
+        // deferred dispose must not send TextInput.clearClient — the platform
+        // would drop B's client and every keystroke after the switch.
+        final state =
+            tester.state(find.byType(_SwappingTerminalHost)) as dynamic;
+        state.selectB();
+        await tester.pump();
+
+        binding.testTextInput.enterText('z');
+        await binding.idle();
+        expect(outputB, <String>['z']);
+      },
+    );
+
+    testWidgets(
       'Windows Enter submitted during IME composition is replayed after commit',
       (tester) async {
         debugDefaultTargetPlatformOverride = TargetPlatform.windows;
@@ -2659,5 +2691,34 @@ class _TwoFieldHostState extends State<_TwoFieldHost> {
         ),
       ],
     );
+  }
+}
+
+/// Mounts one of two terminals at a time, keyed so a switch disposes the
+/// outgoing subtree — the same mount order a detached window's tab strip
+/// produces when the active chip changes.
+class _SwappingTerminalHost extends StatefulWidget {
+  const _SwappingTerminalHost({
+    required this.terminalA,
+    required this.terminalB,
+  });
+
+  final Terminal terminalA;
+  final Terminal terminalB;
+
+  @override
+  State<_SwappingTerminalHost> createState() => _SwappingTerminalHostState();
+}
+
+class _SwappingTerminalHostState extends State<_SwappingTerminalHost> {
+  bool _showA = true;
+
+  void selectB() => setState(() => _showA = false);
+
+  @override
+  Widget build(BuildContext context) {
+    return _showA
+        ? TerminalView(widget.terminalA, key: const ValueKey('a'))
+        : TerminalView(widget.terminalB, key: const ValueKey('b'));
   }
 }
