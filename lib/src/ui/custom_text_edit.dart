@@ -89,10 +89,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// the client instead of trusting a stale flag.
   static final Map<int, CustomTextEditState> _attachedOwners = {};
   Timer? _suppressEnterTimer;
+  Timer? _macShortcutEchoTimer;
+  String? _macShortcutEcho;
 
   /// While a post-commit guard is armed, Enter-shaped input is the echo of
   /// the key that closed the IME composer, not a deliberate submit.
   static const _enterReplayGuard = Duration(milliseconds: 50);
+  static const _macShortcutEchoGuard = Duration(milliseconds: 250);
 
   @override
   void initState() {
@@ -149,6 +152,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   @override
   void dispose() {
     _suppressEnterTimer?.cancel();
+    _macShortcutEchoTimer?.cancel();
     widget.focusNode.removeListener(_onFocusChange);
     _closeInputConnectionIfNeeded();
     super.dispose();
@@ -205,10 +209,58 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     _openOrCloseInputConnectionIfNeeded();
   }
 
+  /// A macOS Command shortcut can arrive twice: once as a handled key event
+  /// and again as a printable updateEditingValue from the native text client.
+  /// Discard only that shortcut character, and only briefly.
+  void suppressMacShortcutTextEcho(String character) {
+    if (defaultTargetPlatform != TargetPlatform.macOS ||
+        !hasInputConnection ||
+        character.isEmpty) {
+      return;
+    }
+    _macShortcutEcho = character.toLowerCase();
+    _macShortcutEchoTimer?.cancel();
+    _macShortcutEchoTimer = Timer(
+      _macShortcutEchoGuard,
+      _clearMacShortcutTextEcho,
+    );
+  }
+
+  void _clearMacShortcutTextEcho() {
+    _macShortcutEcho = null;
+    _macShortcutEchoTimer?.cancel();
+    _macShortcutEchoTimer = null;
+  }
+
+  bool _consumeMacShortcutTextEcho(String insertedText) {
+    final echo = _macShortcutEcho;
+    if (echo == null || insertedText.isEmpty) {
+      return false;
+    }
+    _clearMacShortcutTextEcho();
+    return insertedText.toLowerCase() == echo;
+  }
+
+  void _forwardTextInputInsert(String text) {
+    if (!_consumeMacShortcutTextEcho(text)) {
+      widget.onInsert(text);
+    }
+  }
+
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
     traceTerminalInput(
       'client ${event.runtimeType} label=${event.logicalKey.keyLabel} char=${event.character} composing=${!_currentEditingState.composing.isCollapsed} view=$_attachedViewId',
     );
+    // A fresh unmodified printable key after Cmd+V is genuine user input,
+    // not the delayed text-client echo of the previous shortcut.
+    if (_macShortcutEcho != null &&
+        event is KeyDownEvent &&
+        !HardwareKeyboard.instance.isMetaPressed &&
+        (event.character?.isNotEmpty == true ||
+            event.logicalKey.keyLabel.runes.length == 1 ||
+            event.logicalKey == LogicalKeyboardKey.space)) {
+      _clearMacShortcutTextEcho();
+    }
     if (_currentEditingState.composing.isCollapsed) {
       if (_suppressesReplayEnter(event)) {
         return KeyEventResult.skipRemainingHandlers;
@@ -304,6 +356,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   void _closeInputConnectionIfNeeded() {
+    _clearMacShortcutTextEcho();
     traceTerminalInput(
       'close attached=$_attachedViewId has=$hasInputConnection editing="${_currentEditingState.text}"',
     );
@@ -367,6 +420,10 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     }
 
     widget.onComposing(null);
+    if (wasComposing) {
+      // An IME composition commit must never be mistaken for a Command echo.
+      _clearMacShortcutTextEcho();
+    }
 
     var insertedText = '';
     final newText = _currentEditingState.text;
@@ -379,14 +436,14 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       // pushed below had not landed when this update was produced. Emit only
       // the genuinely new suffix instead of replaying the whole buffer.
       insertedText = newText.substring(previousText.length);
-      widget.onInsert(insertedText);
+      _forwardTextInputInsert(insertedText);
     } else {
       // A fresh value after the platform reset landed, an identical retype of
       // the previous text, an outright replacement, or a buffer that shrank
       // to a prefix of the stale consumed text (the reset landed and this is
       // new input, not a reset echo to swallow).
       insertedText = newText.substring(_initEditingState.text.length);
-      widget.onInsert(insertedText);
+      _forwardTextInputInsert(insertedText);
     }
 
     // Reset editing state if composing is done

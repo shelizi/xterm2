@@ -1252,6 +1252,190 @@ void main() {
   });
 
   group('TerminalView shortcuts', () {
+    testWidgets('macOS Cmd+V drops the native shortcut v echo', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final output = <String>[];
+        final terminal = Terminal(
+          onOutput: output.add,
+          platform: TerminalTargetPlatform.macos,
+        );
+        var pasteCount = 0;
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(
+            terminal,
+            autofocus: true,
+            shortcuts: clipboardTerminalShortcuts,
+            onPaste: () async {
+              pasteCount++;
+              terminal.paste('clipboard text');
+            },
+          ),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyDownEvent(
+          LogicalKeyboardKey.keyV,
+          character: 'v',
+        );
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump();
+        expect(pasteCount, 1);
+        expect(output, <String>['clipboard text']);
+
+        // Some macOS text clients also receive a native editing update for the
+        // V key after the Command shortcut has already pasted the clipboard.
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'v',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await binding.idle();
+        expect(output, <String>['clipboard text']);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('macOS Cmd+V preserves the next real v and unrelated text',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final output = <String>[];
+        final terminal = Terminal(
+          onOutput: output.add,
+          platform: TerminalTargetPlatform.macos,
+        );
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(
+            terminal,
+            autofocus: true,
+            shortcuts: clipboardTerminalShortcuts,
+            onPaste: () async => terminal.paste('pasted'),
+          ),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV, character: 'v');
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump();
+
+        // A second key press is real input even within the echo guard window.
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV, character: 'v');
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'v',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+        await binding.idle();
+        expect(output, <String>['pasted', 'v']);
+
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'x',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await binding.idle();
+        expect(output, <String>['pasted', 'v', 'x']);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('macOS Cmd+V echo guard expires without a native text echo',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final output = <String>[];
+        final terminal = Terminal(
+          onOutput: output.add,
+          platform: TerminalTargetPlatform.macos,
+        );
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(
+            terminal,
+            autofocus: true,
+            shortcuts: clipboardTerminalShortcuts,
+            onPaste: () async => terminal.paste('pasted'),
+          ),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV, character: 'v');
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump(const Duration(milliseconds: 300));
+
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'v',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await binding.idle();
+        expect(output, <String>['pasted', 'v']);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('macOS Cmd+V guard does not swallow a following IME commit',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final output = <String>[];
+        final terminal = Terminal(
+          onOutput: output.add,
+          platform: TerminalTargetPlatform.macos,
+        );
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(
+            terminal,
+            autofocus: true,
+            shortcuts: clipboardTerminalShortcuts,
+            onPaste: () async => terminal.paste('pasted'),
+          ),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV, character: 'v');
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump();
+
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'ㄅ',
+            selection: TextSelection.collapsed(offset: 1),
+            composing: TextRange(start: 0, end: 1),
+          ),
+        );
+        await binding.idle();
+        expect(output, <String>['pasted']);
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'v',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await binding.idle();
+        expect(output, <String>['pasted', 'v']);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
     testWidgets('forwards Ctrl+A and Ctrl+V on non-Apple platforms', (
       tester,
     ) async {

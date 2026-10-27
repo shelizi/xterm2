@@ -733,6 +733,14 @@ class TerminalViewState extends State<TerminalView> {
     );
 
     if (shortcutResult != KeyEventResult.ignored) {
+      if (defaultTargetPlatform == TargetPlatform.macOS &&
+          event is KeyDownEvent &&
+          event.logicalKey == LogicalKeyboardKey.keyV &&
+          HardwareKeyboard.instance.isMetaPressed) {
+        // The shortcut already pasted the clipboard. A delayed native text
+        // input update for this V key must not also reach the PTY.
+        _customTextEditKey.currentState?.suppressMacShortcutTextEcho('v');
+      }
       return shortcutResult;
     }
 
