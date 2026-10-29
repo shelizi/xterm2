@@ -37,6 +37,7 @@ class TerminalActions extends StatelessWidget {
     required this.getLineHeight,
     required this.child,
     this.onPaste,
+    this.onPasteInvoked,
     this.onCopy,
   });
 
@@ -51,6 +52,9 @@ class TerminalActions extends StatelessWidget {
   final Widget child;
 
   final Future<void> Function()? onPaste;
+
+  /// Called before paste executes, including from native macOS menu actions.
+  final void Function()? onPasteInvoked;
   final Future<void> Function(String text)? onCopy;
 
   @override
@@ -59,6 +63,7 @@ class TerminalActions extends StatelessWidget {
       actions: {
         PasteTextIntent: CallbackAction<PasteTextIntent>(
           onInvoke: (intent) async {
+            onPasteInvoked?.call();
             if (onPaste != null) {
               await onPaste!();
               controller.clearSelection();

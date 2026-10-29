@@ -253,6 +253,11 @@ class TerminalViewState extends State<TerminalView> {
 
   late final ShortcutManager _shortcutManager;
 
+  /// The key-up of a locally handled shortcut must not reach the PTY. In
+  /// Kitty event-reporting mode it otherwise appears as a standalone release,
+  /// even though its corresponding press was consumed by this widget.
+  final Set<PhysicalKeyboardKey> _handledShortcutKeys = {};
+
   final _customTextEditKey = GlobalKey<CustomTextEditState>();
 
   final _scrollableKey = GlobalKey<ScrollableState>();
@@ -538,6 +543,7 @@ class TerminalViewState extends State<TerminalView> {
 
     child = TerminalActions(
       onPaste: widget.onPaste,
+      onPasteInvoked: _onPasteActionInvoked,
       onCopy: widget.onCopy,
       terminal: widget.terminal,
       controller: _controller,
@@ -705,6 +711,16 @@ class TerminalViewState extends State<TerminalView> {
     _scrollToBottom();
   }
 
+  void _onPasteActionInvoked() {
+    if (defaultTargetPlatform != TargetPlatform.macOS) {
+      return;
+    }
+    // The native PlatformMenuBar can paste without a Flutter KeyDown.
+    // Cover the delayed text-client V echo and unmatched Kitty key release.
+    _customTextEditKey.currentState?.suppressMacShortcutTextEcho('v');
+    _handledShortcutKeys.add(PhysicalKeyboardKey.keyV);
+  }
+
   void _onComposing(String? text) {
     setState(() => _composingText = text);
   }
@@ -712,13 +728,32 @@ class TerminalViewState extends State<TerminalView> {
   KeyEventResult _handleKeyEvent(FocusNode focusNode, KeyEvent event) {
     _updateHyperlinkModifierState();
 
+    if (event is KeyUpEvent && _handledShortcutKeys.remove(event.physicalKey)) {
+      return KeyEventResult.handled;
+    }
+    if (event is KeyRepeatEvent &&
+        _handledShortcutKeys.contains(event.physicalKey)) {
+      return KeyEventResult.handled;
+    }
+    if (event is KeyDownEvent) {
+      // Recover if the previous release was delivered to a different focus
+      // target. This press starts a fresh shortcut or ordinary key lifecycle.
+      _handledShortcutKeys.remove(event.physicalKey);
+    }
+
     final resultOverride = widget.onKeyEvent?.call(focusNode, event);
     if (resultOverride != null && resultOverride != KeyEventResult.ignored) {
+      if (event is KeyDownEvent) {
+        _handledShortcutKeys.add(event.physicalKey);
+      }
       return resultOverride;
     }
 
     if (_shouldCopySelectionWithControlC(event)) {
       Actions.invoke(focusNode.context!, CopySelectionTextIntent.copy);
+      if (event is KeyDownEvent) {
+        _handledShortcutKeys.add(event.physicalKey);
+      }
       return KeyEventResult.handled;
     }
     final context = focusNode.context;
@@ -733,6 +768,9 @@ class TerminalViewState extends State<TerminalView> {
     );
 
     if (shortcutResult != KeyEventResult.ignored) {
+      if (event is KeyDownEvent) {
+        _handledShortcutKeys.add(event.physicalKey);
+      }
       if (defaultTargetPlatform == TargetPlatform.macOS &&
           event is KeyDownEvent &&
           event.logicalKey == LogicalKeyboardKey.keyV &&

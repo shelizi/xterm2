@@ -1301,6 +1301,127 @@ void main() {
       }
     });
 
+    for (final kittyFlags in <int>[1, 3, 8, 11]) {
+      testWidgets(
+        'macOS Cmd+V does not leak a Kitty V key-up (flags $kittyFlags)',
+        (tester) async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+          try {
+            final output = <String>[];
+            final terminal = Terminal(
+              onOutput: output.add,
+              platform: TerminalTargetPlatform.macos,
+            );
+            terminal.write('\x1b[=$kittyFlags;1u');
+            var pasteCount = 0;
+            await tester.pumpWidget(MaterialApp(
+              home: TerminalView(
+                terminal,
+                autofocus: true,
+                shortcuts: clipboardTerminalShortcuts,
+                onPaste: () async {
+                  pasteCount++;
+                  terminal.paste('pasted');
+                },
+              ),
+            ));
+            await tester.tap(find.byType(TerminalView));
+            await tester.pump();
+
+            await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+            await tester.sendKeyDownEvent(
+              LogicalKeyboardKey.keyV,
+              character: 'v',
+            );
+            await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+            await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+            await tester.pump();
+
+            expect(pasteCount, 1);
+            expect(output, <String>[
+              if (kittyFlags & 8 != 0) '\x1b[57444;9u',
+              'pasted',
+              if (kittyFlags & 8 != 0 && kittyFlags & 2 != 0) '\x1b[57444;1:3u',
+            ]);
+          } finally {
+            debugDefaultTargetPlatformOverride = null;
+          }
+        },
+      );
+    }
+
+    testWidgets('macOS native PasteTextIntent handles unmatched Kitty V KeyUp',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        final output = <String>[];
+        final terminal = Terminal(
+          onOutput: output.add,
+          platform: TerminalTargetPlatform.macos,
+        );
+        terminal.write('\x1b[=3u');
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(
+            terminal,
+            autofocus: true,
+            shortcuts: clipboardTerminalShortcuts,
+            onPaste: () async => terminal.paste('pasted'),
+          ),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+
+        // Native macOS Edit > Paste may consume KeyDown at the menu layer.
+        // Only the matching V KeyUp reaches the terminal's Flutter focus.
+        final focusNode = tester
+            .widget<CustomTextEdit>(find.byType(CustomTextEdit))
+            .focusNode;
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        Actions.invoke(
+          focusNode.context!,
+          const PasteTextIntent(SelectionChangedCause.keyboard),
+        );
+        await tester.pump();
+        expect(output, <String>['pasted']);
+
+        final keyUpResult = focusNode.onKeyEvent?.call(
+          focusNode,
+          const KeyUpEvent(
+            physicalKey: PhysicalKeyboardKey.keyV,
+            logicalKey: LogicalKeyboardKey.keyV,
+            timeStamp: Duration.zero,
+          ),
+        );
+        expect(keyUpResult, KeyEventResult.handled);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'v',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await binding.idle();
+        expect(output, <String>['pasted']);
+        // A distinct unmodified V press is still real text input.
+        await tester.sendKeyDownEvent(
+          LogicalKeyboardKey.keyV,
+          character: 'v',
+        );
+        binding.testTextInput.updateEditingValue(
+          const TextEditingValue(
+            text: 'v',
+            selection: TextSelection.collapsed(offset: 1),
+          ),
+        );
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+        await binding.idle();
+        expect(output, <String>['pasted', 'v']);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
     testWidgets('macOS Cmd+V preserves the next real v and unrelated text',
         (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

@@ -502,6 +502,24 @@ void main() {
       expect(output, isEmpty);
     });
 
+    test('Kitty disambiguation never turns a Cmd+V release into a press', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      for (final flags in <int>[1, 8]) {
+        // Neither mode negotiates reporting of key-up events.
+        terminal.write('\x1b[=$flags;1u');
+        final consumed = terminal.keyInput(
+          TerminalKey.keyV,
+          superKey: true,
+          type: TerminalKeyEventType.release,
+        );
+        expect(consumed, isFalse, reason: 'Kitty flags $flags');
+      }
+
+      expect(output, isEmpty);
+    });
+
     test('reports associated text codepoints', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);

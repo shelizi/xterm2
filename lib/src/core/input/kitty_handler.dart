@@ -28,6 +28,14 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       return null;
     }
 
+    // Reporting a release without negotiating event types turns KeyUp into
+    // an indistinguishable key press (e.g. Cmd+V -> CSI 118;9u). TUIs using
+    // Kitty disambiguation would then see a phantom V after a local paste.
+    if (event.type == TerminalKeyEventType.release &&
+        mode & _reportEventTypes == 0) {
+      return null;
+    }
+
     final specialCode = _specialKeyCode(event.key);
     if (specialCode != null) {
       // Kitty only reports standalone modifier-key events when the application
