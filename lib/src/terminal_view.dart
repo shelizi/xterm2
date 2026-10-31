@@ -5,14 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:xterm2/src/core/buffer/cell_offset.dart';
-import 'package:xterm2/src/core/color_scheme.dart';
-import 'package:xterm2/src/core/input/event.dart';
-import 'package:xterm2/src/core/input/keys.dart';
-import 'package:xterm2/src/core/platform.dart';
-import 'package:xterm2/src/terminal.dart';
+import 'package:xterm2_core/xterm2_core.dart';
 import 'package:xterm2/src/ui/controller.dart';
-import 'package:xterm2/src/ui/cursor_type.dart';
 import 'package:xterm2/src/ui/custom_text_edit.dart';
 import 'package:xterm2/src/ui/gesture/gesture_handler.dart';
 import 'package:xterm2/src/ui/input_map.dart';
@@ -129,9 +123,11 @@ class TerminalView extends StatefulWidget {
     this.simulateScroll = true,
     this.mouseWheelSensitivity = 1,
     this.shiftOverridesMouseReporting = false,
+    this.dragOverridesMouseReporting = false,
     this.onPaste,
     this.onCopy,
     this.cursorBlink,
+    this.touchScrollLinesPerWheelEvent = 1,
   });
 
   /// The underlying terminal that this widget renders.
@@ -139,6 +135,12 @@ class TerminalView extends StatefulWidget {
 
   /// Keep Shift available for local selection even when a TUI requests capture.
   final bool shiftOverridesMouseReporting;
+
+  /// Keep a primary-button drag as local selection even when a TUI requests
+  /// capture. Clicks and wheel input still reach the application; a press
+  /// that turns into a drag is never reported, and a press that does not is
+  /// reported as a click on release.
+  final bool dragOverridesMouseReporting;
   final Future<void> Function()? onPaste;
   final Future<void> Function(String text)? onCopy;
 
@@ -242,7 +244,15 @@ class TerminalView extends StatefulWidget {
   /// scrolling, the terminal will simulate scrolling by sending up/down arrow
   /// keys to the application. This is standard behavior for most terminal
   /// emulators. True by default.
+  ///
+  /// Scroll routing does not depend on [readOnly]: an application that owns
+  /// its scroll (alternate screen or mouse reporting) still receives wheel
+  /// reports, or these simulated keys, from a read-only view.
   final bool simulateScroll;
+
+  /// Lines of finger travel that produce one wheel report when the
+  /// application owns scrolling. 1 by default, which matches a mouse notch.
+  final int touchScrollLinesPerWheelEvent;
 
   @override
   State<TerminalView> createState() => TerminalViewState();
@@ -485,6 +495,7 @@ class TerminalViewState extends State<TerminalView> {
       mouseWheelSensitivity: widget.mouseWheelSensitivity,
       shiftOverridesMouseReporting: widget.shiftOverridesMouseReporting,
       readOnly: widget.readOnly,
+      touchScrollLinesPerWheelEvent: widget.touchScrollLinesPerWheelEvent,
       sendMouseEvent: (button, state, offset, {required modifiers}) {
         return renderTerminal.mouseEvent(
           button,
@@ -552,10 +563,7 @@ class TerminalViewState extends State<TerminalView> {
       child: child,
     );
 
-    child = KeyboardVisibilty(
-      onKeyboardShow: _onKeyboardShow,
-      child: child,
-    );
+    child = KeyboardVisibilty(onKeyboardShow: _onKeyboardShow, child: child);
 
     child = TerminalGestureHandler(
       terminalView: this,
@@ -581,8 +589,9 @@ class TerminalViewState extends State<TerminalView> {
     );
 
     child = Container(
-      color:
-          widget.theme.background.withValues(alpha: widget.backgroundOpacity),
+      color: widget.theme.background.withValues(
+        alpha: widget.backgroundOpacity,
+      ),
       padding: widget.padding,
       child: child,
     );
@@ -762,10 +771,7 @@ class TerminalViewState extends State<TerminalView> {
     }
 
     // ignore: invalid_use_of_protected_member
-    final shortcutResult = _shortcutManager.handleKeypress(
-      context,
-      event,
-    );
+    final shortcutResult = _shortcutManager.handleKeypress(context, event);
 
     if (shortcutResult != KeyEventResult.ignored) {
       if (event is KeyDownEvent) {
@@ -863,10 +869,7 @@ class TerminalViewState extends State<TerminalView> {
     return true;
   }
 
-  bool _isAltGraphActive(
-    KeyEvent event,
-    HardwareKeyboard hardwareKeyboard,
-  ) {
+  bool _isAltGraphActive(KeyEvent event, HardwareKeyboard hardwareKeyboard) {
     if (widget.terminal.platform == TerminalTargetPlatform.macos) return false;
     if (hardwareKeyboard.isLogicalKeyPressed(LogicalKeyboardKey.altGraph)) {
       return true;

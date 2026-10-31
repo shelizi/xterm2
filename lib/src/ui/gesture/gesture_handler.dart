@@ -1,10 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:xterm2/src/core/mouse/button.dart';
-import 'package:xterm2/src/core/mouse/button_state.dart';
-import 'package:xterm2/src/core/mouse/mode.dart';
-import 'package:xterm2/src/core/mouse/modifiers.dart';
+import 'package:xterm2_core/xterm2_core.dart';
 import 'package:xterm2/src/terminal_view.dart';
 import 'package:xterm2/src/ui/controller.dart';
 import 'package:xterm2/src/ui/gesture/gesture_detector.dart';
@@ -75,6 +72,12 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   var _applicationOwnsPointerDrag = false;
 
+  /// A primary press withheld from a tracking application until it resolves
+  /// into a click (reported on release) or a drag (never reported).
+  Offset? _withheldPrimaryPress;
+
+  var _hostOwnsPrimaryDrag = false;
+
   final Map<int, int> _pressedMouseButtons = {};
 
   final Map<int, int> _reportedMouseButtons = {};
@@ -133,9 +136,16 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     if (event.kind != PointerDeviceKind.mouse) return;
 
     final previousButtons = _pressedMouseButtons[event.pointer] ?? 0;
-    final pressedButtons = event.buttons & ~previousButtons;
+    var pressedButtons = event.buttons & ~previousButtons;
     _pressedMouseButtons[event.pointer] = event.buttons;
     if (!_shouldSendTapEvent) return;
+
+    if (pressedButtons & kPrimaryMouseButton != 0 &&
+        _dragOverridesMouseReporting &&
+        _applicationHandlesTap) {
+      _withheldPrimaryPress = event.localPosition;
+      pressedButtons &= ~kPrimaryMouseButton;
+    }
 
     var reportedButtons = _reportedMouseButtons[event.pointer] ?? 0;
     for (final (buttonMask, terminalButton) in _mouseButtons) {
@@ -158,12 +168,39 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     final previousButtons = _pressedMouseButtons[event.pointer] ?? 0;
     final releasedButtons = previousButtons & ~event.buttons;
     _updatePressedMouseButtons(event.pointer, event.buttons);
+    if (releasedButtons & kPrimaryMouseButton != 0) {
+      _reportWithheldClick(event.localPosition);
+    }
     _releaseMouseButtons(event.pointer, releasedButtons, event.localPosition);
+  }
+
+  /// A withheld press that never became a drag is a click: report the press
+  /// where it happened and the release where it ended, back to back.
+  void _reportWithheldClick(Offset releasePosition) {
+    final pressPosition = _withheldPrimaryPress;
+    _withheldPrimaryPress = null;
+    if (pressPosition == null || !_shouldSendTapEvent) return;
+
+    final modifiers = _currentModifiers();
+    final handled = renderTerminal.mouseEvent(
+      TerminalMouseButton.left,
+      TerminalMouseButtonState.down,
+      pressPosition,
+      modifiers: modifiers,
+    );
+    if (!handled) return;
+    renderTerminal.mouseEvent(
+      TerminalMouseButton.left,
+      TerminalMouseButtonState.up,
+      releasePosition,
+      modifiers: modifiers,
+    );
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
     if (event.kind != PointerDeviceKind.mouse) return;
 
+    _withheldPrimaryPress = null;
     _pressedMouseButtons.remove(event.pointer);
     final reportedButtons = _reportedMouseButtons[event.pointer] ?? 0;
     _releaseMouseButtons(
@@ -210,6 +247,12 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     if (widget.readOnly ||
         _bypassesMouseReportingWithShift ||
         !widget.terminalController.shouldSendPointerInput(input)) {
+      return;
+    }
+    // Motion under a withheld press belongs to whichever gesture it resolves
+    // into, and a local selection drag is not the application's to see.
+    if (input == PointerInput.drag &&
+        (_withheldPrimaryPress != null || _hostOwnsPrimaryDrag)) {
       return;
     }
 
@@ -316,6 +359,14 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         !widget.terminalView.widget.terminal.mouseShiftCaptureMode;
   }
 
+  bool get _dragOverridesMouseReporting =>
+      widget.terminalView.widget.dragOverridesMouseReporting;
+
+  /// Whether a primary-button gesture selects locally although the
+  /// application tracks the mouse.
+  bool get _selectsDespiteTracking =>
+      _applicationHandlesTap && _dragOverridesMouseReporting;
+
   void onTapDown(TapDownDetails details) {
     // onTapDown is special, as it will always call the supplied callback.
     // The TerminalView depends on it to bring the terminal into focus.
@@ -351,12 +402,18 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onDoubleTapDown(TapDownDetails details) {
-    if (_applicationHandlesTap) return;
+    if (_applicationHandlesTap) {
+      if (!_dragOverridesMouseReporting) return;
+      _withheldPrimaryPress = null;
+    }
     renderTerminal.selectWord(details.localPosition);
   }
 
   void onTripleTapDown(TapDownDetails details) {
-    if (_applicationHandlesTap) return;
+    if (_applicationHandlesTap) {
+      if (!_dragOverridesMouseReporting) return;
+      _withheldPrimaryPress = null;
+    }
     renderTerminal.selectLine(details.localPosition);
   }
 
@@ -391,7 +448,10 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     _stopSelectionAutoScroll();
     _lastDragStartDetails = details;
     _lastDragPosition = details.localPosition;
-    _applicationOwnsPointerDrag = _applicationHandlesTap;
+    _hostOwnsPrimaryDrag = _selectsDespiteTracking;
+    if (_hostOwnsPrimaryDrag) _withheldPrimaryPress = null;
+    _applicationOwnsPointerDrag =
+        _applicationHandlesTap && !_hostOwnsPrimaryDrag;
     if (_applicationOwnsPointerDrag) return;
 
     if (details.kind != PointerDeviceKind.mouse) {
@@ -454,6 +514,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   void _finishDragSelection() {
     _stopSelectionAutoScroll();
     _applicationOwnsPointerDrag = false;
+    _hostOwnsPrimaryDrag = false;
     _lastDragStartDetails = null;
     _lastDragPosition = null;
   }

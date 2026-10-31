@@ -1,2 +1,1 @@
-/// Platforms without dart:io drop the diagnostic trace.
-void traceTerminalInput(String message) {}
+export 'package:xterm2_core/src/utils/input_trace.dart';
