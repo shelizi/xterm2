@@ -2,6 +2,18 @@
 
 The upstream base is SoFluffyOS/xterm2 `2a339558ba103e38a304a4eda7c984b45c47e186` (5.3.0). `next` is this fork's default integration branch. `master` is an exact mirror of the upstream default branch; sync the fork into `master`, then separately review any integration into `next`. Both branches are permanent. Preserve tags and releases during branch cleanup. This fork is consumed through Git submodules and is not published on pub.dev.
 
+## xterm2 5.4.0 integration baseline (2026-10-31)
+
+The local integration branch `chore/sync-xterm2-5.4-20261031` merges the upstream `5.4.0` tag and its new pure-Dart `xterm2_core 1.0.0` package. The first merge commit is `7826c7a`; Alera uses a matching local path override for both packages. This is a release candidate, not a claim of macOS native-input E2E signoff.
+
+Upstream already incorporated Alera-derived history/resize, OSC 52 clipboard bounds, unnegotiated Shift+Enter, configurable interaction, paragraph-cache efficiency and OSC 8 hyperlink-pruning commits. It also adds Kitty private-use and release-event filtering, Windows ConPTY selection fixes, and TUI scrolling improvements. Reuse those upstream implementations rather than replaying equivalent fork commits.
+
+Keep Alera-specific tests and narrow implementation differences for the zero-width / filled-line reflow bounds guard (`e522068`), macOS IME and candidate geometry (`3ddbd46`), Windows IME Enter handling (`84fe8a6`, `421bd10`), tab/window text-client ownership (`9f6e7cb`, `9243ed9`), Shift-click extension (`8be5c31`), and macOS native paste/Kitty KeyUp interception (`6e38263`, `6b365fc`). The upstream Kitty release fix only partially overlaps the Alera shortcut lifecycle fix.
+
+Validation at this merge baseline: on Windows, the pure Dart core passed 694 tests; the Flutter package passed 339 tests with two platform-golden tests excluded under the fork's existing CI policy; `flutter analyze --fatal-infos` reported no issues. The two platform-golden pixel mismatches remain separate from functional regression tests. Alera's app integration tests and physical macOS/Windows IME checks are tracked separately. Avoid claiming faster execution without an independent benchmark.
+
+Future upstream sync: compare the actual source and `git range-diff`, preserve the fork-only regression tests, verify both package versions, and test keyboard/clipboard/platform behavior before moving Alera's gitlink. A submodule commit must be reachable from a remote before a CI build or release can consume it. Do not force-push the permanent mirror and integration branches.
+
 ## Retained upstream behavior
 
 Unicode 17, grapheme clusters, Kitty keyboard negotiation, synchronized updates, native OSC 8 links, prompt metadata, search, renderer caching and parser fast paths remain upstream implementations. Alera opts into its clipboard-only shortcut map and continues to own search and navigation. The host protocol does not change.
